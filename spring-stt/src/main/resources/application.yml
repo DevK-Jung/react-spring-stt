@@ -10,11 +10,11 @@ spring:
       max-file-size: 50MB
       max-request-size: 50MB
 
-google:
-  cloud:
-    speech:
-      credentials:
-        path: classpath:stt.json
+#google:
+#  cloud:
+#    speech:
+#      credentials:
+#        path: classpath:stt.json
 
 
 app:
