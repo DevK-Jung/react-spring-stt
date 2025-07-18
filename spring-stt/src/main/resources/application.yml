@@ -1,0 +1,26 @@
+server:
+  port: 8099
+
+spring:
+  application:
+    name: spring-sst
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+google:
+  cloud:
+    speech:
+      credentials:
+        path: ${google-speech-credentials-path}
+      project-id: ${google-speech-credentials-project-id}
+
+# ?? ??? ??
+app:
+  upload:
+    dir: uploads
+  stt:
+    supported-formats: mp3,wav,flac,ogg,m4a
+    max-duration-seconds: 600
