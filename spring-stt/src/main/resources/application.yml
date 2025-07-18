@@ -14,13 +14,17 @@ google:
   cloud:
     speech:
       credentials:
-        path: ${google-speech-credentials-path}
-      project-id: ${google-speech-credentials-project-id}
+        path: classpath:stt.json
 
-# ?? ??? ??
+
 app:
   upload:
     dir: uploads
   stt:
     supported-formats: mp3,wav,flac,ogg,m4a
     max-duration-seconds: 600
+
+logging:
+  level:
+    root: info
+    com.kjung.springsst: debug
