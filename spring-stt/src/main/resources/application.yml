@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: spring-sst
+    name: spring-stt
 
   servlet:
     multipart:
