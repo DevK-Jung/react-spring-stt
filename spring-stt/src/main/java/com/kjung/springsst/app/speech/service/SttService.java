@@ -1,166 +1,159 @@
-// ========== STT Service 구현 ==========
-package com.example.stt.service;
-
-import com.example.stt.dto.SttRequest;
-import com.example.stt.dto.SttResponse;
-import com.example.stt.entity.AudioFile;
-import com.example.stt.entity.TranscriptionStatus;
-import com.example.stt.repository.AudioFileRepository;
+package com.kjung.springsst.app.speech.service;
 
 import com.google.cloud.speech.v1.*;
 import com.google.protobuf.ByteString;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.kjung.springsst.app.speech.dto.SttRequest;
+import com.kjung.springsst.app.speech.dto.SttResponse;
+import com.kjung.springsst.app.speech.dto.TranscriptionResult;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
-import java.util.stream.Collectors;
 
+@Slf4j
 @Service
-@Transactional
 public class SttService {
 
-    private static final Logger logger = LoggerFactory.getLogger(SttService.class);
+    private final SpeechClient speechClient;
+    private final String supportedFormats;
+    private final long maxFileSize;
 
-    @Autowired
-    private AudioFileRepository audioFileRepository;
-
-    @Autowired
-    private SpeechClient speechClient;
-
-    @Value("${app.upload.dir}")
-    private String uploadDir;
-
-    @Value("${app.stt.supported-formats}")
-    private String supportedFormats;
-
-    @Value("${app.stt.max-duration-seconds:600}")
-    private int maxDurationSeconds;
-
-    /**
-     * 오디오 파일 업로드 및 저장
-     */
-//    public AudioFile uploadAudioFile(MultipartFile file) throws IOException {
-//        // 파일 유효성 검사
-//        validateAudioFile(file);
-//
-//        // 고유 파일명 생성
-//        String originalFilename = file.getOriginalFilename();
-//        String extension = getFileExtension(originalFilename);
-//        String uniqueFilename = UUID.randomUUID().toString() + "_" + originalFilename;
-//        String filePath = uploadDir + File.separator + uniqueFilename;
-//
-//        // 파일 저장
-//        Path destinationPath = Paths.get(filePath);
-//        Files.copy(file.getInputStream(), destinationPath);
-//
-//        // 데이터베이스에 저장
-//        AudioFile audioFile = new AudioFile(
-//                uniqueFilename,
-//                originalFilename,
-//                filePath,
-//                file.getSize(),
-//                file.getContentType()
-//        );
-//
-//        audioFile = audioFileRepository.save(audioFile);
-//
-//        logger.info("파일 업로드 완료: {} (ID: {})", originalFilename, audioFile.getId());
-//
-//        return audioFile;
-//    }
+    public SttService(SpeechClient speechClient,
+                      @Value("${app.stt.supported-formats:mp3,wav,flac,ogg,m4a}") String supportedFormats,
+                      @Value("${app.stt.max-file-size-mb:10}") long maxFileSizeMb) {
+        this.speechClient = speechClient;
+        this.supportedFormats = supportedFormats;
+        this.maxFileSize = maxFileSizeMb * 1024 * 1024; // MB를 bytes로 변환
+    }
 
     /**
      * 동기식 음성 인식 수행 (Google Cloud Speech-to-Text)
      */
-    public SttResponse transcribeAudioFile(MultipartFile file, SttRequest sttRequest) {
-//        AudioFile audioFile = audioFileRepository.findById(audioFileId)
-//                .orElseThrow(() -> new RuntimeException("오디오 파일을 찾을 수 없습니다: " + audioFileId));
-
+    public SttResponse transcribeAudioFile(SttRequest sttRequest) {
         try {
-            // 상태를 처리 중으로 변경
-//            audioFile.setStatus(TranscriptionStatus.PROCESSING);
-//            audioFile.setLanguageCode(sttRequest.getLanguageCode());
-//            audioFileRepository.save(audioFile);
+            // 파일 유효성 검사
+            validateAudioFile(sttRequest.getFile());
 
             long startTime = System.currentTimeMillis();
 
+            log.info("음성 인식 시작: {} (크기: {} bytes, 언어: {})",
+                    sttRequest.getFile().getOriginalFilename(),
+                    sttRequest.getFile().getSize(),
+                    sttRequest.getLanguageCode());
+
             // Google Cloud Speech-to-Text 호출
-            String transcription = performSpeechRecognition(audioFile, sttRequest);
+            TranscriptionResult transcriptionResult = performSpeechRecognition(sttRequest);
 
             long processingTime = System.currentTimeMillis() - startTime;
 
-            // 결과 저장
-            audioFile.setTranscribedText(transcription);
-            audioFile.setStatus(TranscriptionStatus.COMPLETED);
-            audioFile.setProcessingTimeMs(processingTime);
+            log.info("음성 인식 완료: {} (처리시간: {}ms, 신뢰도: {})",
+                    sttRequest.getFile().getOriginalFilename(),
+                    processingTime,
+                    transcriptionResult.getAverageConfidence());
 
-            // 신뢰도 점수는 결과에서 추출 (여기서는 간단히 0.9로 설정)
-            audioFile.setConfidenceScore(0.9f);
-
-            audioFile = audioFileRepository.save(audioFile);
-
-            logger.info("음성 인식 완료: {} (처리시간: {}ms)",
-                    audioFile.getOriginalFilename(), processingTime);
-
-            return convertToSttResponse(audioFile);
+            return createSuccessResponse(sttRequest, transcriptionResult, processingTime);
 
         } catch (Exception e) {
-            logger.error("음성 인식 실패: {}", audioFile.getOriginalFilename(), e);
+            log.error("음성 인식 실패: {} - {}",
+                    sttRequest.getFile().getOriginalFilename(), e.getMessage());
 
-            // 실패 상태로 업데이트
-            audioFile.setStatus(TranscriptionStatus.FAILED);
-            audioFileRepository.save(audioFile);
-
-            throw new RuntimeException("음성 인식 실패: " + e.getMessage(), e);
+            return createErrorResponse(sttRequest, e.getMessage());
         }
     }
 
     /**
      * 실제 Google Cloud Speech-to-Text API 호출
      */
-    private String performSpeechRecognition(AudioFile audioFile, SttRequest sttRequest) throws Exception {
-        // 파일 읽기
-        Path audioPath = Paths.get(audioFile.getFilePath());
-        byte[] audioData = Files.readAllBytes(audioPath);
-        ByteString audioBytes = ByteString.copyFrom(audioData);
+    private TranscriptionResult performSpeechRecognition(SttRequest sttRequest) throws Exception {
+        MultipartFile file = sttRequest.getFile();
 
         // 오디오 인코딩 결정
-        RecognitionConfig.AudioEncoding encoding = determineAudioEncoding(audioFile.getMimeType());
+        RecognitionConfig.AudioEncoding encoding = determineAudioEncoding(file);
+
+        log.info("선택된 오디오 인코딩: {}", encoding);
 
         // 인식 설정 구성
-        RecognitionConfig config = RecognitionConfig.newBuilder()
+        RecognitionConfig.Builder configBuilder = RecognitionConfig.newBuilder()
                 .setEncoding(encoding)
                 .setLanguageCode(sttRequest.getLanguageCode())
-                .setSampleRateHertz(16000) // 일반적인 샘플레이트
                 .setEnableAutomaticPunctuation(sttRequest.isEnableAutomaticPunctuation())
                 .setEnableWordTimeOffsets(sttRequest.isEnableWordTimeOffsets())
-                .setModel("latest_long") // 긴 오디오용 모델
-                .setUseEnhanced(true) // 향상된 모델 사용
-                .build();
+                .setSampleRateHertz(16000)
+                .setUseEnhanced(true); // 향상된 모델 사용
+
+        // 인코딩별 추가 설정
+        switch (encoding) {
+            case LINEAR16:
+                configBuilder.setSampleRateHertz(48000);
+                configBuilder.setModel("latest_long");
+                break;
+            case FLAC:
+//                configBuilder.setSampleRateHertz(16000);
+                configBuilder.setModel("latest_long");
+                break;
+            case MP3:
+//                configBuilder.setSampleRateHertz(16000);
+                configBuilder.setModel("latest_long");
+                break;
+            case OGG_OPUS:
+//                configBuilder.setSampleRateHertz(16000);
+                configBuilder.setModel("latest_long");
+                break;
+            case WEBM_OPUS:
+//                configBuilder.setSampleRateHertz(16000);
+                configBuilder.setModel("latest_long");
+                break;
+            default:
+//                configBuilder.setSampleRateHertz(16000);
+                configBuilder.setModel("latest_long");
+        }
+
+        // 여러 언어 후보 추가 (한국어인 경우)
+        if (sttRequest.getLanguageCode().startsWith("ko")) {
+            configBuilder.addAlternativeLanguageCodes("en-US");
+        }
+
+        RecognitionConfig config = configBuilder.build();
 
         // 오디오 데이터 설정
         RecognitionAudio audio = RecognitionAudio.newBuilder()
-                .setContent(audioBytes)
+                .setContent(ByteString.copyFrom(file.getBytes()))
                 .build();
+
+        log.debug("Google Speech API 호출 - 파일: {}, 인코딩: {}, 언어: {}, 파일크기: {}MB",
+                file.getOriginalFilename(), encoding, sttRequest.getLanguageCode(),
+                file.getSize() / 1024.0 / 1024.0);
 
         // 음성 인식 요청
         RecognizeResponse response = speechClient.recognize(config, audio);
         List<SpeechRecognitionResult> results = response.getResultsList();
 
-        // 결과 텍스트 조합
+        if (results.isEmpty()) {
+            // 더 자세한 오류 정보 제공
+            throw new RuntimeException(String.format(
+                    "음성을 인식할 수 없습니다. 다음 사항을 확인해주세요:\n" +
+                            "1. 파일에 명확한 음성이 포함되어 있는지 확인\n" +
+                            "2. 배경 소음이 적은지 확인\n" +
+                            "3. 오디오 품질이 충분한지 확인\n" +
+                            "4. 언어 코드(%s)가 올바른지 확인\n" +
+                            "파일 정보: %s (%.2fMB, %s 인코딩)",
+                    sttRequest.getLanguageCode(),
+                    file.getOriginalFilename(),
+                    file.getSize() / 1024.0 / 1024.0,
+                    encoding.name()));
+        }
+
+        // 결과 텍스트 조합 및 신뢰도 계산
+        return processRecognitionResults(results, sttRequest.isEnableAutomaticPunctuation());
+    }
+
+    /**
+     * 음성 인식 결과 처리
+     */
+    private TranscriptionResult processRecognitionResults(List<SpeechRecognitionResult> results,
+                                                          boolean enableAutomaticPunctuation) {
         StringBuilder transcription = new StringBuilder();
         float totalConfidence = 0f;
         int resultCount = 0;
@@ -168,191 +161,228 @@ public class SttService {
         for (SpeechRecognitionResult result : results) {
             if (!result.getAlternativesList().isEmpty()) {
                 SpeechRecognitionAlternative alternative = result.getAlternativesList().get(0);
-                transcription.append(alternative.getTranscript()).append(" ");
 
-                // 신뢰도 점수 평균 계산
-                totalConfidence += alternative.getConfidence();
-                resultCount++;
+                // 텍스트 추가
+                transcription.append(alternative.getTranscript());
+
+                // 자동 구두점이 비활성화된 경우 공백 추가
+                if (!enableAutomaticPunctuation && !alternative.getTranscript().endsWith(" ")) {
+                    transcription.append(" ");
+                }
+
+                // 신뢰도 점수 계산
+                float confidence = alternative.getConfidence();
+                boolean hasConfidence = confidence > 0;
+                if (hasConfidence) {
+                    totalConfidence += confidence;
+                    resultCount++;
+                }
+
+                log.debug("인식된 텍스트: '{}' (신뢰도: {:.2f})",
+                        alternative.getTranscript(),
+                        hasConfidence ? alternative.getConfidence() : 0f);
             }
         }
 
-        // 평균 신뢰도 저장
-        if (resultCount > 0) {
-            audioFile.setConfidenceScore(totalConfidence / resultCount);
-        }
-
         String finalTranscription = transcription.toString().trim();
-
         if (finalTranscription.isEmpty()) {
-            throw new RuntimeException("음성을 인식할 수 없습니다. 오디오 품질을 확인해주세요.");
+            throw new RuntimeException("음성 내용을 텍스트로 변환할 수 없습니다.");
         }
 
-        return finalTranscription;
+        float averageConfidence = resultCount > 0 ? totalConfidence / resultCount : 0f;
+
+        return new TranscriptionResult(finalTranscription, averageConfidence);
     }
 
     /**
-     * 파일 MIME 타입에 따른 오디오 인코딩 결정
+     * 파일 정보에 따른 오디오 인코딩 결정 (개선된 버전)
      */
-    private RecognitionConfig.AudioEncoding determineAudioEncoding(String mimeType) {
-        if (mimeType == null) {
-            return RecognitionConfig.AudioEncoding.LINEAR16; // 기본값
+    private RecognitionConfig.AudioEncoding determineAudioEncoding(MultipartFile file) {
+        String contentType = file.getContentType();
+        String filename = file.getOriginalFilename();
+
+        log.debug("오디오 인코딩 결정 - ContentType: {}, FileName: {}", contentType, filename);
+
+        // Content-Type 우선 확인
+        RecognitionConfig.AudioEncoding encodingByContentType = getEncodingByContentType(contentType);
+        if (encodingByContentType != null)
+            return encodingByContentType;
+
+        // 파일 확장자로 판단
+        String extension = getFileExtension(filename).toLowerCase();
+        RecognitionConfig.AudioEncoding encodingByExtension = getEncodingByExtension(extension);
+        if (encodingByExtension != null) {
+            return encodingByExtension;
         }
 
-        switch (mimeType.toLowerCase()) {
-            case "audio/wav":
-            case "audio/wave":
-                return RecognitionConfig.AudioEncoding.LINEAR16;
-            case "audio/flac":
-                return RecognitionConfig.AudioEncoding.FLAC;
-            case "audio/ogg":
-                return RecognitionConfig.AudioEncoding.OGG_OPUS;
-            case "audio/mp3":
-            case "audio/mpeg":
-                return RecognitionConfig.AudioEncoding.MP3;
-            case "audio/mp4":
-            case "audio/m4a":
-                return RecognitionConfig.AudioEncoding.MP3; // MP4는 MP3로 처리
-            default:
-                logger.warn("알 수 없는 MIME 타입: {}. LINEAR16으로 처리합니다.", mimeType);
-                return RecognitionConfig.AudioEncoding.LINEAR16;
-        }
+        log.warn("알 수 없는 오디오 형식 - ContentType: {}, FileName: {}. LINEAR16으로 처리합니다.",
+                contentType, filename);
+
+        return RecognitionConfig.AudioEncoding.LINEAR16;
+    }
+
+    /**
+     * Content-Type으로 인코딩 결정 (개선된 버전)
+     */
+    private RecognitionConfig.AudioEncoding getEncodingByContentType(String contentType) {
+        if (contentType == null) return null;
+
+        return switch (contentType.toLowerCase()) {
+            case "audio/wav", "audio/wave", "audio/x-wav" -> RecognitionConfig.AudioEncoding.LINEAR16;
+            case "audio/flac", "audio/x-flac" -> RecognitionConfig.AudioEncoding.FLAC;
+            case "audio/ogg", "audio/ogg; codecs=opus" -> RecognitionConfig.AudioEncoding.OGG_OPUS;
+            case "audio/mp3", "audio/mpeg" -> RecognitionConfig.AudioEncoding.MP3;
+            // M4A는 AMR 또는 WEBM_OPUS로 처리 (Google Cloud Speech-to-Text API 호환)
+            case "audio/mp4", "audio/m4a", "audio/x-m4a" -> RecognitionConfig.AudioEncoding.WEBM_OPUS;
+            default -> null;
+        };
+    }
+
+    /**
+     * 파일 확장자로 인코딩 결정 (개선된 버전)
+     */
+    private RecognitionConfig.AudioEncoding getEncodingByExtension(String extension) {
+        return switch (extension) {
+            case "wav" -> RecognitionConfig.AudioEncoding.LINEAR16;
+            case "flac" -> RecognitionConfig.AudioEncoding.FLAC;
+            case "ogg" -> RecognitionConfig.AudioEncoding.OGG_OPUS;
+            case "mp3" -> RecognitionConfig.AudioEncoding.MP3;
+            // M4A는 WEBM_OPUS로 처리 (Google Cloud Speech-to-Text API 호환)
+            case "m4a", "mp4" -> RecognitionConfig.AudioEncoding.WEBM_OPUS;
+            default -> null;
+        };
     }
 
     /**
      * 오디오 파일 유효성 검사
      */
     private void validateAudioFile(MultipartFile file) {
-        if (file.isEmpty()) {
-            throw new RuntimeException("파일이 비어있습니다.");
-        }
+        if (file == null || file.isEmpty())
+            throw new IllegalArgumentException("파일이 비어있습니다.");
 
-        // 파일 크기 검사 (50MB 제한)
-        if (file.getSize() > 50 * 1024 * 1024) {
-            throw new RuntimeException("파일 크기가 50MB를 초과합니다.");
-        }
+        // 파일 크기 검사
+        if (file.getSize() > maxFileSize)
+            throw new IllegalArgumentException(String.format(
+                    "파일 크기가 제한을 초과합니다. (현재: %.2f MB, 최대: %.2f MB)",
+                    file.getSize() / 1024.0 / 1024.0,
+                    maxFileSize / 1024.0 / 1024.0));
 
-        // 파일 확장자 검사
         String filename = file.getOriginalFilename();
-        if (filename == null || filename.isEmpty()) {
-            throw new RuntimeException("파일명이 올바르지 않습니다.");
-        }
 
+        // 지원되는 파일 형식 검사
+        validateFileFormat(filename);
+
+        log.debug("파일 유효성 검사 통과: {} ({} bytes)", filename, file.getSize());
+    }
+
+    /**
+     * 파일 형식 유효성 검사
+     */
+    private void validateFileFormat(String filename) {
         String extension = getFileExtension(filename).toLowerCase();
-        String[] supportedExtensions = supportedFormats.split(",");
+        if (extension.isEmpty())
+            throw new IllegalArgumentException("파일 확장자가 없습니다.");
 
-        boolean isSupported = false;
+        String[] supportedExtensions = supportedFormats.split(",");
         for (String supportedExt : supportedExtensions) {
-            if (extension.equals(supportedExt.trim())) {
-                isSupported = true;
-                break;
+            if (extension.equals(supportedExt.trim().toLowerCase())) {
+                return; // 지원되는 형식 발견
             }
         }
 
-        if (!isSupported) {
-            throw new RuntimeException("지원되지 않는 파일 형식입니다. 지원 형식: " + supportedFormats);
-        }
+        throw new IllegalArgumentException(
+                String.format("지원되지 않는 파일 형식입니다. (입력: %s, 지원 형식: %s)",
+                        extension, supportedFormats));
     }
 
     /**
      * 파일 확장자 추출
      */
     private String getFileExtension(String filename) {
+        if (filename == null) return "";
+
         int lastDotIndex = filename.lastIndexOf('.');
-        if (lastDotIndex == -1) {
+
+        if (lastDotIndex == -1 || lastDotIndex == filename.length() - 1)
             return "";
-        }
+
         return filename.substring(lastDotIndex + 1);
     }
 
     /**
-     * 모든 오디오 파일 조회
+     * 성공 응답 생성
      */
-    public List<SttResponse> getAllAudioFiles() {
-        List<AudioFile> audioFiles = audioFileRepository.findAll();
-        return audioFiles.stream()
-                .map(this::convertToSttResponse)
-                .collect(Collectors.toList());
+    private SttResponse createSuccessResponse(SttRequest request, TranscriptionResult result, long processingTime) {
+        return SttResponse.builder()
+                .success(true)
+                .originalFilename(request.getFile().getOriginalFilename())
+                .transcribedText(result.getTranscription())
+                .confidenceScore(result.getAverageConfidence())
+                .processingTimeMs(processingTime)
+                .languageCode(request.getLanguageCode())
+                .fileSize(request.getFile().getSize())
+                .build();
     }
 
     /**
-     * 특정 오디오 파일 조회
+     * 에러 응답 생성
      */
-    public SttResponse getAudioFileById(Long id) {
-        AudioFile audioFile = audioFileRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("오디오 파일을 찾을 수 없습니다: " + id));
-
-        return convertToSttResponse(audioFile);
+    private SttResponse createErrorResponse(SttRequest request, String errorMessage) {
+        return SttResponse.builder()
+                .success(false)
+                .originalFilename(request.getFile().getOriginalFilename())
+                .errorMessage(errorMessage)
+                .fileSize(request.getFile().getSize())
+                .build();
     }
 
     /**
-     * 상태별 오디오 파일 조회
+     * 지원되는 언어 코드 목록
      */
-    public List<SttResponse> getAudioFilesByStatus(TranscriptionStatus status) {
-        List<AudioFile> audioFiles = audioFileRepository.findByStatusOrderByCreatedAtDesc(status);
-        return audioFiles.stream()
-                .map(this::convertToSttResponse)
-                .collect(Collectors.toList());
+    public String[] getSupportedLanguages() {
+        return new String[]{
+                "ko-KR", // 한국어
+                "en-US", // 영어(미국)
+                "en-GB", // 영어(영국)
+                "ja-JP", // 일본어
+                "zh-CN", // 중국어(간체)
+                "zh-TW", // 중국어(번체)
+                "es-ES", // 스페인어
+                "fr-FR", // 프랑스어
+                "de-DE", // 독일어
+                "it-IT", // 이탈리아어
+                "pt-BR", // 포르투갈어(브라질)
+                "ru-RU", // 러시아어
+                "ar-SA"  // 아랍어
+        };
     }
 
     /**
-     * 오디오 파일 삭제
+     * 지원되는 파일 형식 목록
      */
-    public void deleteAudioFile(Long id) throws IOException {
-        AudioFile audioFile = audioFileRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("오디오 파일을 찾을 수 없습니다: " + id));
+    public String[] getSupportedFormats() {
+        return supportedFormats.split(",");
+    }
 
-        // 파일 시스템에서 파일 삭제
-        Path filePath = Paths.get(audioFile.getFilePath());
-        if (Files.exists(filePath)) {
-            Files.delete(filePath);
+    /**
+     * 간단한 음성 인식 (기본 설정)
+     */
+    public String simpleTranscribe(MultipartFile file, String languageCode) {
+        SttRequest request = SttRequest.builder()
+                .file(file)
+                .languageCode(languageCode != null ? languageCode : "ko-KR")
+                .enableAutomaticPunctuation(true)
+                .enableWordTimeOffsets(false)
+                .build();
+
+        SttResponse response = transcribeAudioFile(request);
+
+        if (response.isSuccess()) {
+            return response.getTranscribedText();
+        } else {
+            throw new RuntimeException(response.getErrorMessage());
         }
-
-        // 데이터베이스에서 레코드 삭제
-        audioFileRepository.delete(audioFile);
-
-        logger.info("파일 삭제 완료: {} (ID: {})", audioFile.getOriginalFilename(), id);
     }
 
-    /**
-     * 검색 기능
-     */
-    public List<SttResponse> searchAudioFiles(String keyword) {
-        List<AudioFile> audioFiles = audioFileRepository.findByOriginalFilenameContainingIgnoreCase(keyword);
-        return audioFiles.stream()
-                .map(this::convertToSttResponse)
-                .collect(Collectors.toList());
-    }
 
-    /**
-     * 통계 정보 조회
-     */
-    public SttStatistics getStatistics() {
-        long totalFiles = audioFileRepository.count();
-        long completedFiles = audioFileRepository.findByStatusOrderByCreatedAtDesc(TranscriptionStatus.COMPLETED).size();
-        long failedFiles = audioFileRepository.findByStatusOrderByCreatedAtDesc(TranscriptionStatus.FAILED).size();
-
-        Float avgConfidence = audioFileRepository.getAverageConfidenceScore();
-        Double avgProcessingTime = audioFileRepository.getAverageProcessingTime();
-
-        return new SttStatistics(
-                totalFiles,
-                completedFiles,
-                failedFiles,
-                avgConfidence != null ? avgConfidence : 0f,
-                avgProcessingTime != null ? avgProcessingTime.longValue() : 0L
-        );
-    }
-
-    /**
-     * Entity를 DTO로 변환
-     */
-    private SttResponse convertToSttResponse(AudioFile audioFile) {
-        return new SttResponse(
-                audioFile.getId(),
-                audioFile.getOriginalFilename(),
-                audioFile.getTranscribedText(),
-                audioFile.getStatus(),
-                audioFile.getConfidenceScore(),
-                audioFile.getProcessingTimeMs(),
-                audioFile.getCreatedAt(),
-                audioFile.getLanguageCode()
+}
