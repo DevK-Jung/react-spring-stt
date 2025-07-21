@@ -18,11 +18,10 @@ spring:
 
 
 app:
-  upload:
-    dir: uploads
   stt:
     supported-formats: mp3,wav,flac,ogg,m4a
     max-duration-seconds: 600
+    default-language-code: ko_KR
 
 logging:
   level:

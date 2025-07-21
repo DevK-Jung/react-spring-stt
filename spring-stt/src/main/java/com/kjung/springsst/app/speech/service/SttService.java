@@ -2,30 +2,37 @@ package com.kjung.springsst.app.speech.service;
 
 import com.google.cloud.speech.v1.*;
 import com.google.protobuf.ByteString;
+import com.kjung.springsst.app.file.util.FileUtil;
 import com.kjung.springsst.app.speech.dto.SttRequest;
 import com.kjung.springsst.app.speech.dto.SttResponse;
-import com.kjung.springsst.app.speech.dto.TranscriptionResult;
+import com.kjung.springsst.infra.googleStt.vo.TranscriptionResult;
+import com.kjung.springsst.infra.googleStt.util.SpeechConfigUtil;
+import com.kjung.springsst.infra.googleStt.GoogleSttHelper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Locale;
 
 @Slf4j
 @Service
 public class SttService {
 
-    private final SpeechClient speechClient;
+    private final GoogleSttHelper googleSttHelper;
     private final String supportedFormats;
     private final long maxFileSize;
+    private final String defaultLanguageCode;
 
-    public SttService(SpeechClient speechClient,
+    public SttService(GoogleSttHelper googleSttHelper,
                       @Value("${app.stt.supported-formats:mp3,wav,flac,ogg,m4a}") String supportedFormats,
-                      @Value("${app.stt.max-file-size-mb:10}") long maxFileSizeMb) {
-        this.speechClient = speechClient;
+                      @Value("${app.stt.max-file-size-mb:10}") long maxFileSizeMb,
+                      @Value("${app.stt.default-language-code:ko_KR}") String defaultLanguageCode) {
+        this.googleSttHelper = googleSttHelper;
         this.supportedFormats = supportedFormats;
         this.maxFileSize = maxFileSizeMb * 1024 * 1024; // MB를 bytes로 변환
+        this.defaultLanguageCode = defaultLanguageCode;
     }
 
     /**
@@ -41,7 +48,8 @@ public class SttService {
             log.info("음성 인식 시작: {} (크기: {} bytes, 언어: {})",
                     sttRequest.getFile().getOriginalFilename(),
                     sttRequest.getFile().getSize(),
-                    sttRequest.getLanguageCode());
+                    defaultLanguageCode
+            );
 
             // Google Cloud Speech-to-Text 호출
             TranscriptionResult transcriptionResult = performSpeechRecognition(sttRequest);
@@ -51,7 +59,7 @@ public class SttService {
             log.info("음성 인식 완료: {} (처리시간: {}ms, 신뢰도: {})",
                     sttRequest.getFile().getOriginalFilename(),
                     processingTime,
-                    transcriptionResult.getAverageConfidence());
+                    transcriptionResult.averageConfidence());
 
             return createSuccessResponse(sttRequest, transcriptionResult, processingTime);
 
@@ -74,48 +82,14 @@ public class SttService {
 
         log.info("선택된 오디오 인코딩: {}", encoding);
 
-        // 인식 설정 구성
-        RecognitionConfig.Builder configBuilder = RecognitionConfig.newBuilder()
-                .setEncoding(encoding)
-                .setLanguageCode(sttRequest.getLanguageCode())
-                .setEnableAutomaticPunctuation(sttRequest.isEnableAutomaticPunctuation())
-                .setEnableWordTimeOffsets(sttRequest.isEnableWordTimeOffsets())
-                .setSampleRateHertz(16000)
-                .setUseEnhanced(true); // 향상된 모델 사용
-
-        // 인코딩별 추가 설정
-        switch (encoding) {
-            case LINEAR16:
-                configBuilder.setSampleRateHertz(48000);
-                configBuilder.setModel("latest_long");
-                break;
-            case FLAC:
-//                configBuilder.setSampleRateHertz(16000);
-                configBuilder.setModel("latest_long");
-                break;
-            case MP3:
-//                configBuilder.setSampleRateHertz(16000);
-                configBuilder.setModel("latest_long");
-                break;
-            case OGG_OPUS:
-//                configBuilder.setSampleRateHertz(16000);
-                configBuilder.setModel("latest_long");
-                break;
-            case WEBM_OPUS:
-//                configBuilder.setSampleRateHertz(16000);
-                configBuilder.setModel("latest_long");
-                break;
-            default:
-//                configBuilder.setSampleRateHertz(16000);
-                configBuilder.setModel("latest_long");
-        }
-
-        // 여러 언어 후보 추가 (한국어인 경우)
-        if (sttRequest.getLanguageCode().startsWith("ko")) {
-            configBuilder.addAlternativeLanguageCodes("en-US");
-        }
-
-        RecognitionConfig config = configBuilder.build();
+        // 인식 설정 구성 (유틸리티 클래스 사용)
+        RecognitionConfig config = SpeechConfigUtil.buildRecognitionConfig(
+                encoding,
+                Locale.KOREA.toString(),
+                sttRequest.isEnableAutomaticPunctuation(),
+                sttRequest.isEnableWordTimeOffsets(),
+                getSupportedLanguages()
+        );
 
         // 오디오 데이터 설정
         RecognitionAudio audio = RecognitionAudio.newBuilder()
@@ -123,76 +97,13 @@ public class SttService {
                 .build();
 
         log.debug("Google Speech API 호출 - 파일: {}, 인코딩: {}, 언어: {}, 파일크기: {}MB",
-                file.getOriginalFilename(), encoding, sttRequest.getLanguageCode(),
+                file.getOriginalFilename(), encoding, defaultLanguageCode,
                 file.getSize() / 1024.0 / 1024.0);
 
-        // 음성 인식 요청
-        RecognizeResponse response = speechClient.recognize(config, audio);
-        List<SpeechRecognitionResult> results = response.getResultsList();
-
-        if (results.isEmpty()) {
-            // 더 자세한 오류 정보 제공
-            throw new RuntimeException(String.format(
-                    "음성을 인식할 수 없습니다. 다음 사항을 확인해주세요:\n" +
-                            "1. 파일에 명확한 음성이 포함되어 있는지 확인\n" +
-                            "2. 배경 소음이 적은지 확인\n" +
-                            "3. 오디오 품질이 충분한지 확인\n" +
-                            "4. 언어 코드(%s)가 올바른지 확인\n" +
-                            "파일 정보: %s (%.2fMB, %s 인코딩)",
-                    sttRequest.getLanguageCode(),
-                    file.getOriginalFilename(),
-                    file.getSize() / 1024.0 / 1024.0,
-                    encoding.name()));
-        }
-
-        // 결과 텍스트 조합 및 신뢰도 계산
-        return processRecognitionResults(results, sttRequest.isEnableAutomaticPunctuation());
+        // GoogleSttHelper를 사용한 음성 인식 요청
+        return googleSttHelper.recognizeSync(config, audio);
     }
 
-    /**
-     * 음성 인식 결과 처리
-     */
-    private TranscriptionResult processRecognitionResults(List<SpeechRecognitionResult> results,
-                                                          boolean enableAutomaticPunctuation) {
-        StringBuilder transcription = new StringBuilder();
-        float totalConfidence = 0f;
-        int resultCount = 0;
-
-        for (SpeechRecognitionResult result : results) {
-            if (!result.getAlternativesList().isEmpty()) {
-                SpeechRecognitionAlternative alternative = result.getAlternativesList().get(0);
-
-                // 텍스트 추가
-                transcription.append(alternative.getTranscript());
-
-                // 자동 구두점이 비활성화된 경우 공백 추가
-                if (!enableAutomaticPunctuation && !alternative.getTranscript().endsWith(" ")) {
-                    transcription.append(" ");
-                }
-
-                // 신뢰도 점수 계산
-                float confidence = alternative.getConfidence();
-                boolean hasConfidence = confidence > 0;
-                if (hasConfidence) {
-                    totalConfidence += confidence;
-                    resultCount++;
-                }
-
-                log.debug("인식된 텍스트: '{}' (신뢰도: {:.2f})",
-                        alternative.getTranscript(),
-                        hasConfidence ? alternative.getConfidence() : 0f);
-            }
-        }
-
-        String finalTranscription = transcription.toString().trim();
-        if (finalTranscription.isEmpty()) {
-            throw new RuntimeException("음성 내용을 텍스트로 변환할 수 없습니다.");
-        }
-
-        float averageConfidence = resultCount > 0 ? totalConfidence / resultCount : 0f;
-
-        return new TranscriptionResult(finalTranscription, averageConfidence);
-    }
 
     /**
      * 파일 정보에 따른 오디오 인코딩 결정 (개선된 버전)
@@ -209,7 +120,7 @@ public class SttService {
             return encodingByContentType;
 
         // 파일 확장자로 판단
-        String extension = getFileExtension(filename).toLowerCase();
+        String extension = FileUtil.getFileExtension(filename).toLowerCase();
         RecognitionConfig.AudioEncoding encodingByExtension = getEncodingByExtension(extension);
         if (encodingByExtension != null) {
             return encodingByExtension;
@@ -247,7 +158,6 @@ public class SttService {
             case "flac" -> RecognitionConfig.AudioEncoding.FLAC;
             case "ogg" -> RecognitionConfig.AudioEncoding.OGG_OPUS;
             case "mp3" -> RecognitionConfig.AudioEncoding.MP3;
-            // M4A는 WEBM_OPUS로 처리 (Google Cloud Speech-to-Text API 호환)
             case "m4a", "mp4" -> RecognitionConfig.AudioEncoding.WEBM_OPUS;
             default -> null;
         };
@@ -279,7 +189,7 @@ public class SttService {
      * 파일 형식 유효성 검사
      */
     private void validateFileFormat(String filename) {
-        String extension = getFileExtension(filename).toLowerCase();
+        String extension = FileUtil.getFileExtension(filename).toLowerCase();
         if (extension.isEmpty())
             throw new IllegalArgumentException("파일 확장자가 없습니다.");
 
@@ -295,19 +205,6 @@ public class SttService {
                         extension, supportedFormats));
     }
 
-    /**
-     * 파일 확장자 추출
-     */
-    private String getFileExtension(String filename) {
-        if (filename == null) return "";
-
-        int lastDotIndex = filename.lastIndexOf('.');
-
-        if (lastDotIndex == -1 || lastDotIndex == filename.length() - 1)
-            return "";
-
-        return filename.substring(lastDotIndex + 1);
-    }
 
     /**
      * 성공 응답 생성
@@ -316,10 +213,10 @@ public class SttService {
         return SttResponse.builder()
                 .success(true)
                 .originalFilename(request.getFile().getOriginalFilename())
-                .transcribedText(result.getTranscription())
-                .confidenceScore(result.getAverageConfidence())
+                .transcribedText(result.transcription())
+                .confidenceScore(result.averageConfidence())
                 .processingTimeMs(processingTime)
-                .languageCode(request.getLanguageCode())
+                .languageCode(defaultLanguageCode)
                 .fileSize(request.getFile().getSize())
                 .build();
     }
@@ -337,52 +234,32 @@ public class SttService {
     }
 
     /**
-     * 지원되는 언어 코드 목록
+     * 지원되는 언어 코드 목록.
+     * <p>
+     * 이 기능은 음성 명령이나 검색어와 같은 짧은 말을 텍스트로 변환해야 하는 앱에 적합합니다.
+     * 기본 언어 외에도 Speech-to-Text가 지원하는 언어 중 최대 3개의 대체 언어를 목록에 포함할 수 있습니다(총 4개 언어).
+     * <p>
+     * 음성 텍스트 변환 요청에 대체 언어를 지정할 수 있는 경우라도 languageCode 필드에 기본 언어 코드를 제공해야 합니다.
+     * 또한, 요청하는 언어의 수를 최소로 제한해야 합니다.
+     * 요청하는 대체 언어 코드가 적을수록 Speech-to-Text가 정확한 언어를 선택할 확률이 높습니다.
+     * 단일 언어만 지정할 때 가장 좋은 결과를 얻을 수 있습니다.
+     * <p>
      */
-    public String[] getSupportedLanguages() {
-        return new String[]{
-                "ko-KR", // 한국어
-                "en-US", // 영어(미국)
-                "en-GB", // 영어(영국)
-                "ja-JP", // 일본어
-                "zh-CN", // 중국어(간체)
-                "zh-TW", // 중국어(번체)
-                "es-ES", // 스페인어
-                "fr-FR", // 프랑스어
-                "de-DE", // 독일어
-                "it-IT", // 이탈리아어
-                "pt-BR", // 포르투갈어(브라질)
-                "ru-RU", // 러시아어
-                "ar-SA"  // 아랍어
-        };
+    public List<String> getSupportedLanguages() {
+        return List.of(
+                Locale.ENGLISH.toString(), // "en-US", // 영어(미국)
+//                "en-GB", // 영어(영국)
+                Locale.JAPANESE.toString() // "ja-JP" // 일본어
+//                "zh-CN", // 중국어(간체)
+//                "zh-TW", // 중국어(번체)
+//                "es-ES", // 스페인어
+//                "fr-FR", // 프랑스어
+//                "de-DE", // 독일어
+//                "it-IT", // 이탈리아어
+//                "pt-BR", // 포르투갈어(브라질)
+//                "ru-RU", // 러시아어
+//                "ar-SA"  // 아랍어
+        );
     }
-
-    /**
-     * 지원되는 파일 형식 목록
-     */
-    public String[] getSupportedFormats() {
-        return supportedFormats.split(",");
-    }
-
-    /**
-     * 간단한 음성 인식 (기본 설정)
-     */
-    public String simpleTranscribe(MultipartFile file, String languageCode) {
-        SttRequest request = SttRequest.builder()
-                .file(file)
-                .languageCode(languageCode != null ? languageCode : "ko-KR")
-                .enableAutomaticPunctuation(true)
-                .enableWordTimeOffsets(false)
-                .build();
-
-        SttResponse response = transcribeAudioFile(request);
-
-        if (response.isSuccess()) {
-            return response.getTranscribedText();
-        } else {
-            throw new RuntimeException(response.getErrorMessage());
-        }
-    }
-
 
 }

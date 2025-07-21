@@ -11,7 +11,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class SttRequest {
     private MultipartFile file;
 
-    private String languageCode = "ko-KR";
+//    private String languageCode = "ko-KR";
 
     private boolean enableAutomaticPunctuation = true;
 
