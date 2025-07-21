@@ -18,7 +18,7 @@ public class SttController {
 
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public SttResponse speechToText(SttRequest request) {
-        return sttService.transcribeAudioFile(request);
+    public SttResponse recognizeSync(SttRequest request) {
+        return sttService.recognizeSync(request);
     }
 }

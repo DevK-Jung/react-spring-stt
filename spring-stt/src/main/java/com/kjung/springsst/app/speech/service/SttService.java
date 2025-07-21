@@ -16,13 +16,18 @@ public class SttService {
     private final GoogleSttHelper googleSttHelper;
 
     /**
-     * 동기식 음성 인식 수행 (Google Cloud Speech-to-Text)
+     * 동기식 음성 인식 수행 (Google Cloud Speech-to-Text).
      */
-    public SttResponse transcribeAudioFile(SttRequest sttRequest) {
+    public SttResponse recognizeSync(SttRequest sttRequest) {
 
         long startTime = System.currentTimeMillis();
 
-        TranscriptionResult transcriptionResult = googleSttHelper.recognizeSync(sttRequest.getFile(), sttRequest.isEnableAutomaticPunctuation(), sttRequest.isEnableWordTimeOffsets());
+        TranscriptionResult transcriptionResult =
+                googleSttHelper.recognizeSync(
+                        sttRequest.getFile(),
+                        sttRequest.isEnableAutomaticPunctuation(),
+                        sttRequest.isEnableWordTimeOffsets()
+                );
 
         long processingTime = System.currentTimeMillis() - startTime;
 
