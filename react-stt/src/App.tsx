@@ -1,24 +1,22 @@
-import logo from './logo.svg';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import './App.css';
+import SttList from './pages/stt/SttList.tsx';
+import SttSync from './pages/stt/SttSync.tsx';
+import SttAsync from './pages/stt/SttAsync.tsx';
+import SttStreaming from './pages/stt/SttStreaming.tsx';
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo"/>
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <Router>
+      <div className="App">
+        <Routes>
+          <Route path="/" element={<SttList/>}/>
+          <Route path="/stt/sync" element={<SttSync/>}/>
+          <Route path="/stt/async" element={<SttAsync/>}/>
+          <Route path="/stt/streaming" element={<SttStreaming/>}/>
+        </Routes>
+      </div>
+    </Router>
   );
 }
 
