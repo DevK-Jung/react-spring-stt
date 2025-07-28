@@ -1,5 +1,6 @@
 package com.kjung.springsst.infra.googleStt;
 
+import com.google.api.gax.rpc.ApiStreamObserver;
 import com.google.cloud.speech.v1.*;
 import com.google.protobuf.ByteString;
 import com.kjung.springsst.app.file.util.FileUtil;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -102,6 +104,36 @@ public class GoogleSttHelper {
         }
     }
 
+    /**
+     * 스트리밍 음성 인식 - SSE를 통한 실시간 스트리밍
+     *
+     * @param file 음성 파일
+     * @param enableAutomaticPunctuation 자동 구두점 활성화
+     * @param enableWordTimeOffsets 단어 시간 오프셋 활성화
+     * @param sseEmitter SSE 스트리밍을 위한 emitter
+     */
+//    public void streamingRecognizeFile(MultipartFile file,
+//                                       boolean enableAutomaticPunctuation,
+//                                       boolean enableWordTimeOffsets,
+//                                       SseEmitter sseEmitter) {
+//        validateAudioFile(file);
+//
+//        // 별도 스레드에서 비동기 처리
+//        CompletableFuture.runAsync(() -> {
+//            try {
+//                processStreamingRecognition(
+//                        file,
+//                        enableAutomaticPunctuation,
+//                        enableWordTimeOffsets,
+//                        sseEmitter);
+//
+//            } catch (Exception e) {
+//                log.error("스트리밍 처리 중 오류 발생", e);
+//                sseEmitter.completeWithError(e);
+//            }
+//        });
+//    }
+
 
     /**
      * 오디오 파일 유효성 검사
@@ -169,6 +201,99 @@ public class GoogleSttHelper {
             throw new RuntimeException("음성 인식 API 호출 중 오류가 발생했습니다: " + e.getMessage(), e);
         }
     }
+
+    /**
+     * 실제 스트리밍 인식 처리 로직
+     */
+//    private void processStreamingRecognition(MultipartFile file,
+//                                             boolean enableAutomaticPunctuation,
+//                                             boolean enableWordTimeOffsets,
+//                                             SseEmitter sseEmitter) {
+//        try {
+//            // 오디오 인코딩 결정
+//            RecognitionConfig.AudioEncoding encoding = determineAudioEncoding(file);
+//
+//            // 인식 설정 구성
+//            RecognitionConfig recConfig = SpeechConfigUtil.buildRecognitionConfig(
+//                    encoding,
+//                    defaultLanguageCode,
+//                    enableAutomaticPunctuation,
+//                    enableWordTimeOffsets
+//            );
+//
+//            // 스트리밍 설정 (중간 결과 포함)
+//            StreamingRecognitionConfig config = StreamingRecognitionConfig.newBuilder()
+//                    .setConfig(recConfig)
+//                    .setInterimResults(true)  // 중간 결과도 받기
+//                    .setSingleUtterance(false) // 연속 음성 인식
+//                    .build();
+//
+//            // 실시간 스트리밍을 위한 Observer 생성
+//            StreamingResponseObserver responseObserver = new StreamingResponseObserver(sseEmitter);
+//
+//            // BidiStreaming 호출 준비
+//            BidiStreamingCallable<StreamingRecognizeRequest, StreamingRecognizeResponse> callable =
+//                    speechClient.streamingRecognizeCallable();
+//
+//            ApiStreamObserver<StreamingRecognizeRequest> requestObserver =
+//                    callable.bidiStreamingCall(responseObserver);
+//
+//            // 첫 번째 요청: 설정만 포함
+//            requestObserver.onNext(
+//                    StreamingRecognizeRequest.newBuilder()
+//                            .setStreamingConfig(config)
+//                            .build());
+//
+//            // 오디오 데이터를 청크 단위로 스트리밍 전송
+//            streamAudioData(file, requestObserver);
+//
+//            // 전송 완료 신호
+//            requestObserver.onCompleted();
+//
+//            log.info("스트리밍 음성 인식 요청 완료 - 파일: {}", file.getOriginalFilename());
+//
+//        } catch (Exception e) {
+//            log.error("스트리밍 음성 인식 처리 중 오류: {}", e.getMessage(), e);
+//            throw new RuntimeException("음성 인식 처리 중 오류가 발생했습니다: " + e.getMessage(), e);
+//        }
+//    }
+
+    /**
+     * 오디오 데이터를 청크 단위로 스트리밍 전송
+     */
+    private void streamAudioData(MultipartFile file,
+                                 ApiStreamObserver<StreamingRecognizeRequest> requestObserver) throws Exception {
+        byte[] audioData = file.getBytes();
+        int chunkSize = 8192; // 8KB 청크
+
+        log.debug("오디오 데이터 스트리밍 시작 - 총 크기: {} bytes, 청크 크기: {} bytes",
+                audioData.length, chunkSize);
+
+        // 청크 단위로 나누어 전송
+        for (int i = 0; i < audioData.length; i += chunkSize) {
+            int end = Math.min(i + chunkSize, audioData.length);
+            byte[] chunk = Arrays.copyOfRange(audioData, i, end);
+
+            // 청크 전송
+            requestObserver.onNext(
+                    StreamingRecognizeRequest.newBuilder()
+                            .setAudioContent(ByteString.copyFrom(chunk))
+                            .build());
+
+            // 청크 간 약간의 지연 (실제 스트리밍 시뮬레이션)
+            try {
+                Thread.sleep(50); // 50ms 지연
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("스트리밍 중 인터럽트 발생", e);
+            }
+
+            log.trace("오디오 청크 전송 완료: {}/{} bytes", end, audioData.length);
+        }
+
+        log.debug("오디오 데이터 스트리밍 완료");
+    }
+
 
 //    /**
 //     * MultipartFile로부터 비동기식 음성 인식 수행
@@ -294,8 +419,6 @@ public class GoogleSttHelper {
             throw new RuntimeException("음성 내용을 텍스트로 변환할 수 없습니다.");
 
         float averageConfidence = resultCount > 0 ? totalConfidence / resultCount : 0f;
-
-        // AOP에서 로깅하므로 여기서는 제거
 
         return new TranscriptionResult(finalTranscription, averageConfidence);
     }

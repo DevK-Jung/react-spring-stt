@@ -19,6 +19,12 @@ const SttList = () => {
       title: 'STT 스트리밍',
       path: '/stt/streaming',
       description: '실시간으로 음성을 텍스트로 변환합니다.'
+    },
+    {
+      id: 'streaming2',
+      title: 'STT 스트리밍2',
+      path: '/stt/streaming2',
+      description: '실시간으로 음성을 텍스트로 변환합니다.'
     }
   ];
 

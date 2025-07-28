@@ -8,7 +8,8 @@ const SttStreaming = () => {
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
   const wsRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
@@ -20,7 +21,8 @@ const SttStreaming = () => {
   const connectWebSocket = () => {
     try {
       setConnectionStatus('connecting');
-      const wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/api/stt/streaming`;
+        const wsUrl = `ws://localhost:8099/ws/speech`;
+      console.log('Connecting to WebSocket:', wsUrl);
       wsRef.current = new WebSocket(wsUrl);
 
       wsRef.current.onopen = () => {
@@ -29,28 +31,45 @@ const SttStreaming = () => {
       };
 
       wsRef.current.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'transcription') {
-          if (data.isFinal) {
-            setTranscription(prev => prev + data.text + ' ');
-          } else {
-            setTranscription(prev => {
-              const sentences = prev.split(' ');
-              sentences[sentences.length - 1] = data.text;
-              return sentences.join(' ');
-            });
+        console.log('Received WebSocket message:', event.data);
+        try {
+          const data = JSON.parse(event.data);
+          console.log('Parsed data:', data);
+          
+          if (data.error) {
+            setError(data.error);
+            return;
           }
-        } else if (data.type === 'error') {
-          setError(data.message);
+          
+          if (data.transcript) {
+            if (data.isFinal) {
+              setTranscription(prev => prev + data.transcript + ' ');
+            } else {
+              setTranscription(prev => {
+                const lines = prev.trim().split('\n');
+                if (lines[lines.length - 1].startsWith('[임시]')) {
+                  lines[lines.length - 1] = '[임시] ' + data.transcript;
+                } else {
+                  lines.push('[임시] ' + data.transcript);
+                }
+                return lines.join('\n');
+              });
+            }
+          }
+        } catch (err) {
+          console.error('메시지 파싱 오류:', err);
+          setError('응답 데이터 파싱 오류');
         }
       };
 
-      wsRef.current.onerror = () => {
+      wsRef.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
         setError('WebSocket 연결 오류가 발생했습니다.');
         setConnectionStatus('disconnected');
       };
 
-      wsRef.current.onclose = () => {
+      wsRef.current.onclose = (event) => {
+        console.log('WebSocket connection closed:', event.code, event.reason);
         setConnectionStatus('disconnected');
       };
 
@@ -72,25 +91,52 @@ const SttStreaming = () => {
           sampleRate: 16000,
           channelCount: 1,
           echoCancellation: true,
-          noiseSuppression: true
+          noiseSuppression: true,
+          autoGainControl: true
         }
       });
 
       streamRef.current = stream;
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+      // AudioContext를 사용하여 PCM 데이터 처리
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000
       });
 
-      mediaRecorderRef.current = mediaRecorder;
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(event.data);
+      audioContextRef.current = audioContext;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      processor.onaudioprocess = (event) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          const inputBuffer = event.inputBuffer;
+          const inputData = inputBuffer.getChannelData(0);
+          
+          // Float32Array를 Int16Array로 변환 (LINEAR16)
+          const int16Data = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            int16Data[i] = Math.max(-32768, Math.min(32767, Math.floor(inputData[i] * 32768)));
+          }
+          
+          // ArrayBuffer로 변환하여 전송
+          const buffer = int16Data.buffer;
+          console.log('Sending PCM audio data:', buffer.byteLength, 'bytes');
+          wsRef.current.send(buffer);
         }
       };
 
-      mediaRecorder.start(250);
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      // START_STREAM 신호 전송
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        console.log('Sending START_STREAM message');
+        wsRef.current.send('START_STREAM');
+      }
+
       setIsStreaming(true);
       setError('');
       setTranscription('');
@@ -101,9 +147,20 @@ const SttStreaming = () => {
   };
 
   const stopStreaming = () => {
-    if (mediaRecorderRef.current && isStreaming) {
-      mediaRecorderRef.current.stop();
-      setIsStreaming(false);
+    // END_STREAM 신호 전송
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('Sending END_STREAM message');
+      wsRef.current.send('END_STREAM');
+    }
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
     }
 
     if (streamRef.current) {
@@ -111,12 +168,7 @@ const SttStreaming = () => {
       streamRef.current = null;
     }
 
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    setConnectionStatus('disconnected');
+    setIsStreaming(false);
   };
 
   const clearTranscription = () => {
@@ -276,7 +328,9 @@ const SttStreaming = () => {
           fontSize: '16px',
           lineHeight: '1.5',
           whiteSpace: 'pre-wrap',
-          fontFamily: 'monospace'
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          maxHeight: '400px',
+          overflowY: 'auto'
         }}>
           {transcription || '음성 인식 결과가 여기에 표시됩니다...'}
         </div>
