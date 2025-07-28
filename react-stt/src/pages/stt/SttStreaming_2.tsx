@@ -1,7 +1,11 @@
 import { useRef, useState } from 'react';
 
 const SttStreaming_2 = () => {
-  const [voiceText, setVoiceText] = useState<string>('');
+  // 최종 확정된 텍스트를 저장할 상태. 문장 단위로 추가됩니다.
+  const [finalVoiceText, setFinalVoiceText] = useState<string>('');
+  // 현재 말하고 있는 중인 잠정적인 텍스트를 저장할 상태. 계속 업데이트됩니다.
+  const [interimVoiceText, setInterimVoiceText] = useState<string>('');
+
   const [isTalking, setIsTalking] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
 
@@ -20,10 +24,13 @@ const SttStreaming_2 = () => {
       webSocket.current = null;
     }
     setIsListening(false);
+    // 연결 종료 시 텍스트 상태 초기화
+    // setFinalVoiceText('');
+    setInterimVoiceText('');
   };
 
   const setupWebSocket = async () => {
-    closeWebSocket();
+    closeWebSocket(); // 기존 연결이 있다면 닫고 상태 초기화
 
     const ws = new WebSocket('ws://localhost:8099/ws/speech');
 
@@ -49,6 +56,7 @@ const SttStreaming_2 = () => {
         });
 
         // AudioWorklet 모듈 로드
+        // '/linear16-processor.js' 파일이 웹 서버의 루트 경로에 올바르게 위치하는지 확인하세요.
         await audioContext.current.audioWorklet.addModule('/linear16-processor.js');
 
         // 오디오 소스 생성
@@ -85,29 +93,32 @@ const SttStreaming_2 = () => {
           }
 
           analyser.current.getByteFrequencyData(dataArray);
+          // 평균 볼륨 계산 (간단한 방법)
           const avgVolume = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
 
-          if (avgVolume > 30) {
+          if (avgVolume > 30) { // 임계값 30은 환경에 따라 조절 필요
             setIsTalking(true);
           } else {
             setIsTalking(false);
           }
 
+          // 다음 프레임에서 함수 다시 호출
           requestAnimationFrame(detectTalking);
         };
 
-        detectTalking();
+        detectTalking(); // 음성 활동 감지 시작
 
-        // MediaRecorder 정지 핸들러
+        // MediaRecorder 정지 핸들러 (AudioWorkletNode를 사용하므로 MediaRecorder는 사실상 오디오 데이터 전송에는 사용되지 않음)
+        // 그러나 스트림을 관리하고 정리하는 용도로 유지
         mediaRecorder.current.onstop = () => {
           if (processor.current && audioContext.current && source.current && stream.current) {
-            stream.current.getTracks().forEach((track) => track.stop());
-            source.current.disconnect(processor.current);
+            stream.current.getTracks().forEach((track) => track.stop()); // 스트림의 모든 트랙 중지
+            source.current.disconnect(processor.current); // 오디오 노드 연결 해제
             processor.current.disconnect(audioContext.current.destination);
           }
         };
 
-        mediaRecorder.current.start(chunkRate);
+        mediaRecorder.current.start(chunkRate); // MediaRecorder 시작 (AudioWorklet 사용 시 오디오 데이터 자체는 여기서 오지 않음)
         setIsListening(true);
       } catch (error) {
         console.error('마이크 접근 오류:', error);
@@ -117,10 +128,20 @@ const SttStreaming_2 = () => {
 
     ws.onmessage = (event: MessageEvent) => {
       try {
-        // const data: WebSocketMessage = JSON.parse(event.data);
-        const data: any = JSON.parse(event.data);
-        console.log(data);
-        setVoiceText((prev) => prev + ' ' + data.transcript);
+        // 백엔드에서 보낸 JSON 데이터 파싱: { transcript: "...", isFinal: true/false }
+        const data: { transcript: string; isFinal: boolean } = JSON.parse(event.data);
+
+        if (data.isFinal) {
+          // 최종 결과인 경우:
+          // 1. 최종 텍스트에 현재 최종 결과를 추가합니다. (뒤에 공백 추가)
+          setFinalVoiceText((prev) => prev + data.transcript + ' ');
+          // 2. 잠정 텍스트는 비웁니다.
+          setInterimVoiceText('');
+        } else {
+          // 잠정 결과인 경우:
+          // 1. 잠정 텍스트만 업데이트합니다. 최종 텍스트는 건드리지 않습니다.
+          setInterimVoiceText(data.transcript);
+        }
       } catch (error) {
         console.error('메시지 파싱 오류:', error);
       }
@@ -128,7 +149,8 @@ const SttStreaming_2 = () => {
 
     ws.onerror = (error: Event) => {
       console.error('WebSocket 오류:', error);
-      setVoiceText('');
+      setFinalVoiceText('');
+      setInterimVoiceText('');
     };
 
     ws.onclose = () => {
@@ -154,6 +176,8 @@ const SttStreaming_2 = () => {
 
       setIsListening(false);
       setIsTalking(false);
+      setFinalVoiceText('');
+      setInterimVoiceText('');
     };
 
     webSocket.current = ws;
@@ -193,7 +217,12 @@ const SttStreaming_2 = () => {
         <div className="transcript">
           <h2>인식된 텍스트:</h2>
           <div className="transcript-text">
-            {voiceText || '음성을 입력해주세요...'}
+            {/* 최종 확정된 텍스트와 현재 잠정적인 텍스트를 함께 표시합니다. */}
+            {finalVoiceText}
+            {/* 잠정 텍스트는 최종 텍스트와 시각적으로 구분되도록 스타일을 적용할 수 있습니다. */}
+            <span style={{color: 'gray'}}>{interimVoiceText}</span>
+            {/* 아무 텍스트도 없을 때만 기본 메시지 표시 */}
+            {!finalVoiceText && !interimVoiceText && '음성을 입력해주세요...'}
           </div>
         </div>
       </header>

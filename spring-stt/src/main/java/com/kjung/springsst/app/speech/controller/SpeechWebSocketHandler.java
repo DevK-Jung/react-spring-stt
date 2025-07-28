@@ -1,8 +1,7 @@
 package com.kjung.springsst.app.speech.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.cloud.speech.v1.SpeechClient;
-import com.kjung.springsst.infra.googleStt.StreamingRecognizeClient;
+import com.kjung.springsst.infra.googleStt.GoogleSTTService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -16,7 +15,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 
 @Slf4j
@@ -24,25 +22,24 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class SpeechWebSocketHandler extends BinaryWebSocketHandler {
 
-    private final SpeechClient speechClient;
+    private final GoogleSTTService googleSTTService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final Map<String, StreamingRecognizeClient> clientStreams = new ConcurrentHashMap<>();
 
-    public StreamingRecognizeClient createStreamingClient(Consumer<String> transcriptConsumer) {
-        return new StreamingRecognizeClient(speechClient, transcriptConsumer);
-    }
+    private final Map<String, GoogleSTTService.StreamingRecognizeClient> clientStreams = new ConcurrentHashMap<>();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("WebSocket connection established: {}", session.getId());
 
         // Google STT 스트리밍 클라이언트 생성
-        StreamingRecognizeClient client = createStreamingClient(
-                transcript -> {
+        GoogleSTTService.StreamingRecognizeClient client = googleSTTService.createStreamingClient(
+                resultMap -> {
                     try {
-                        Map<String, String> response = Map.of("transcript", transcript);
-                        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
+                        if (session.isOpen()) {
+                            // Map 객체를 JSON 문자열로 변환하여 전송
+                            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(resultMap)));
+                        }
                     } catch (IOException e) {
                         log.error("Error sending transcript", e);
                     }
@@ -58,7 +55,7 @@ public class SpeechWebSocketHandler extends BinaryWebSocketHandler {
         byte[] audioData = new byte[buffer.remaining()];
         buffer.get(audioData);
 
-        StreamingRecognizeClient client = clientStreams.get(session.getId());
+        GoogleSTTService.StreamingRecognizeClient client = clientStreams.get(session.getId());
         if (client != null) {
             client.sendAudioData(audioData);
         }
@@ -77,7 +74,7 @@ public class SpeechWebSocketHandler extends BinaryWebSocketHandler {
     }
 
     private void closeClient(String sessionId) {
-        StreamingRecognizeClient client = clientStreams.remove(sessionId);
+        GoogleSTTService.StreamingRecognizeClient client = clientStreams.remove(sessionId);
         if (client != null) {
             client.close();
         }

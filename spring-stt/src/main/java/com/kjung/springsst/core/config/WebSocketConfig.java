@@ -1,8 +1,8 @@
 package com.kjung.springsst.core.config;
 
-import com.kjung.springsst.app.speech.controller.SpeechWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
@@ -12,11 +12,11 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketConfigurer {
 
-    private final SpeechWebSocketHandler speechWebSocketHandler;
+    private final WebSocketHandler webSocketHandler;
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(speechWebSocketHandler, "/ws/speech")
+        registry.addHandler(webSocketHandler, "/ws/speech")
                 .setAllowedOrigins("*");
     }
 }
