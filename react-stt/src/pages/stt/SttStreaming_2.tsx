@@ -56,7 +56,6 @@ const SttStreaming_2 = () => {
         });
 
         // AudioWorklet 모듈 로드
-        // '/linear16-processor.js' 파일이 웹 서버의 루트 경로에 올바르게 위치하는지 확인하세요.
         await audioContext.current.audioWorklet.addModule('/linear16-processor.js');
 
         // 오디오 소스 생성
@@ -108,8 +107,6 @@ const SttStreaming_2 = () => {
 
         detectTalking(); // 음성 활동 감지 시작
 
-        // MediaRecorder 정지 핸들러 (AudioWorkletNode를 사용하므로 MediaRecorder는 사실상 오디오 데이터 전송에는 사용되지 않음)
-        // 그러나 스트림을 관리하고 정리하는 용도로 유지
         mediaRecorder.current.onstop = () => {
           if (processor.current && audioContext.current && source.current && stream.current) {
             stream.current.getTracks().forEach((track) => track.stop()); // 스트림의 모든 트랙 중지
@@ -118,7 +115,7 @@ const SttStreaming_2 = () => {
           }
         };
 
-        mediaRecorder.current.start(chunkRate); // MediaRecorder 시작 (AudioWorklet 사용 시 오디오 데이터 자체는 여기서 오지 않음)
+        mediaRecorder.current.start(chunkRate);
         setIsListening(true);
       } catch (error) {
         console.error('마이크 접근 오류:', error);
@@ -217,11 +214,8 @@ const SttStreaming_2 = () => {
         <div className="transcript">
           <h2>인식된 텍스트:</h2>
           <div className="transcript-text">
-            {/* 최종 확정된 텍스트와 현재 잠정적인 텍스트를 함께 표시합니다. */}
             {finalVoiceText}
-            {/* 잠정 텍스트는 최종 텍스트와 시각적으로 구분되도록 스타일을 적용할 수 있습니다. */}
             <span style={{color: 'gray'}}>{interimVoiceText}</span>
-            {/* 아무 텍스트도 없을 때만 기본 메시지 표시 */}
             {!finalVoiceText && !interimVoiceText && '음성을 입력해주세요...'}
           </div>
         </div>
